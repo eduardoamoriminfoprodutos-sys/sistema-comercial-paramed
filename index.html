@@ -790,16 +790,30 @@ function baixarTudo(){
   return SB.from('vendas').select('vendedora,dia,valor')
     .gte('dia', CFG.ano+'-'+mm+'-01').lte('dia', CFG.ano+'-'+mm+'-'+diasNoMes())
     .then(function(r){
-      if(r.error){ marcar('erro','Erro ao carregar'); console.error(r.error); return false; }
+      if(r.error){
+        console.error(r.error);
+        marcar('erro', ehPermissao(r.error) ? 'Banco bloqueado · falta liberar o acesso'
+                                            : 'Falha ao carregar · verifique a internet');
+        return false;
+      }
       var novo={};
       (r.data||[]).forEach(function(l){
         if(!novo[l.vendedora]) novo[l.vendedora]={};
         novo[l.vendedora][l.dia]=Number(l.valor);
       });
-      DADOS=novo; marcar('','Sincronizado'); return true;
+      DADOS=novo;
+      var qtd=0; Object.keys(novo).forEach(function(k){ qtd+=Object.keys(novo[k]).length; });
+      marcar('', qtd ? 'Sincronizado' : 'Sem lançamentos ainda');
+      return true;
     });
 }
 
+/* separa falta de permissão (banco respondeu não) de falta de internet */
+function ehPermissao(err){
+  if(!err) return false;
+  var c=String(err.code||''), m=String(err.message||'');
+  return c==='42501' || c==='PGRST301' || /row-level security|JWT|permission/i.test(m);
+}
 function gravarDia(vend, iso, valor){
   marcar('salvando','Salvando...');
   var req = (valor>0)
@@ -810,9 +824,13 @@ function gravarDia(vend, iso, valor){
     marcar('','Sincronizado'); return true;
   }).catch(function(err){
     console.error(err);
+    if(ehPermissao(err)){
+      marcar('erro','Banco bloqueado · falta liberar o acesso');
+      return 'permissao';
+    }
     FILA=FILA.filter(function(f){ return !(f.v===vend && f.d===iso); });
     FILA.push({v:vend,d:iso,val:valor}); guardarFila();
-    marcar('erro','Sem conexão · '+FILA.length+' pendente(s)');
+    marcar('erro','Sem internet · '+FILA.length+' na fila');
     return false;
   });
 }
@@ -987,9 +1005,10 @@ function abrirCal(id){
       if(n>0) DADOS[id][iso2]=n; else delete DADOS[id][iso2];
       campo.parentNode.classList.toggle('tem', n>0);
       resumoCal(id); pintarPicks();
-      gravarDia(id, iso2, n).then(function(ok){
-        aviso(ok ? (n>0?'Salvo: '+fmtCel(n):'Lançamento removido')
-                 : 'Sem conexão · será enviado depois');
+      gravarDia(id, iso2, n).then(function(res){
+        if(res===true) aviso(n>0 ? 'Salvo: '+fmtCel(n) : 'Lançamento removido');
+        else if(res==='permissao') aviso('O banco recusou: falta liberar o acesso no Supabase');
+        else aviso('Sem internet · será enviado quando voltar');
       });
     });
     inp.addEventListener('keydown',function(e){ if(e.key==='Enter') this.blur(); });
